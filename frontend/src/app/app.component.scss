@@ -1,0 +1,45 @@
+h1 {
+  font-family: 'Arial', sans-serif; // Non-serif font for the header
+  font-weight: bold;
+}
+
+mat-card {
+  background-color: #e0f7fa; // Very light blue background color
+  border-radius: 12px; // Rounded corners for a modern look
+  padding: 10px; // Reduced padding inside the card
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); // Light shadow for a modern, elevated feel
+  margin: 10px;
+
+  mat-card-header {
+    font-family: 'Arial', sans-serif; // Non-serif font for the header
+    font-weight: bold;
+    color: #003a34; // Teal color for the header text
+    background-color: #e0f7fa; 
+    padding: 5px;
+    border-radius: 8px 8px 0 0; // Rounded top corners for the header
+  }
+
+  mat-card-content {
+    font-family: 'Arial', sans-serif; // Non-serif font for content
+    font-size: 1rem;
+    color: #333333; // Dark grey text color for better readability
+
+    b {
+      color: #002c27; // Teal color for bold text
+    }
+
+    br {
+      margin-bottom: 5px;
+    }
+  }
+
+  mat-card-footer {
+    font-family: 'Arial', sans-serif;
+    font-size: 0.85rem; // Smaller font for a more subtle footer
+    color: #555; // Slightly lighter text for footer
+    text-align: right; // Center align the text
+    padding: 5px 0; // Reduced vertical padding for spacing
+    border-radius: 0 0 8px 8px; // Rounded bottom corners
+    margin-top: 10px; // Reduced space between content and footer
+  }
+}

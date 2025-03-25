@@ -1,0 +1,11 @@
+<mat-card appearance="outlined"  *ngIf="stationName">
+    <mat-card-header>Water</mat-card-header>
+    <mat-card-content>
+        <b>Water Temp: </b>{{ waterTemperature !== null ? waterTemperature : 'Loading...' }} °F, {{ waterTemperatureTrend !== null ? waterTemperatureTrend : 'Loading...' }}<br>
+        <b>Current Tide: </b>{{ currentWaterLevel !== null ? currentWaterLevel : 'Loading...' }} ft, {{ currentTideCycle !== null ? currentTideCycle : 'Loading...' }}<br>
+        <b>Next Tide: </b>{{ nextTideV !== null ? nextTideV : 'Loading...' }} ft <b> At: </b> {{ nextTideTime !== null ? nextTideTime : 'Loading...' }}<br>
+    </mat-card-content>
+    <mat-card-footer>
+        <b>Station: </b>{{ stationName !== null ? stationName : 'Loading...' }} <b>At:</b> {{ waterTemperatureTimeStamp !== null ? waterTemperatureTimeStamp : 'Loading...' }}
+    </mat-card-footer>
+</mat-card>

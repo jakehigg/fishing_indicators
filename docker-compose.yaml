@@ -1,0 +1,19 @@
+services:
+  find_backend:
+    build: 
+      context: ./backend/.
+      dockerfile: Dockerfile.local
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app
+    environment:
+      - FLASK_ENV=development
+  find_frontend:
+    build: 
+      context: ./frontend/.
+      dockerfile: Dockerfile.local
+    ports:
+      - "4200:4200"
+    volumes:
+      - ./frontend:/app

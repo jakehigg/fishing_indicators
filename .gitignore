@@ -1,0 +1,10 @@
+__pycache__
+.venv/
+node_modules
+.angular
+.DS_store
+.aider*
+.terraform
+main.auto.tfvars
+output_for_s3/
+package/

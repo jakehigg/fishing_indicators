@@ -1,0 +1,320 @@
+stages:
+  - terraform
+  - backend
+  - frontend
+  - deploy
+  - prepare_for_github
+
+variables:
+  TF_ROOT: terraform 
+  TF_PLUGIN_CACHE_DIR: "/runner_cache/${CI_PROJECT_NAME}/${$CI_COMMIT_BRANCH}/plugin-cache"
+  PIP_CACHE: "/runner_cache/${CI_PROJECT_NAME}/venv"
+
+.terraform-cache: &terraform-cache
+  key: $CI_COMMIT_REF_SLUG
+  paths:
+    - terraform/.terraform/
+    - terraform/.terraform.lock.hcl
+  policy: pull-push
+
+.tfout-cache: &tfout-cache
+  key: $CI_COMMIT_SHORT_SHA-tfout
+  paths:
+    - ${TF_ROOT}/terraform_output.json
+    - ${TF_ROOT}/tfplan.txt
+  policy: pull-push
+
+.frontend-cache: &frontend-cache
+  key: $CI_COMMIT_SHORT_SHA-frontend
+  paths:
+    - frontend/output_for_s3/
+  policy: pull-push
+
+.backend-cache: &backend-cache
+  key: ${CI_COMMIT_SHORT_SHA}-backend
+  paths:
+    - backend/*.zip
+  policy: pull-push
+
+.tf_plumbing: |
+  cd ${TF_ROOT}
+  echo "Branch $CI_COMMIT_BRANCH"
+  echo "target $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+  if [ "$CI_COMMIT_BRANCH" == "prod" ] || [ "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" == "prod" ]; then 
+      tf_workspace="prod"
+  else
+      tf_workspace="dev"
+  fi
+  terraform workspace select $tf_workspace
+  echo "Switched to Workspace $tf_workspace"
+
+.aws_plumbing: |
+  role_arn=$(jq -r '.role_arn.value' ${TF_ROOT}/terraform_output.json)
+  export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+  $(aws sts assume-role \
+  --role-arn $role_arn \
+  --role-session-name TargetSessionName \
+  --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+  --output text))
+
+init:
+  stage: terraform
+  script:
+    - cd ${TF_ROOT}
+    - terraform init -input=false -reconfigure
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  cache:
+    - <<: *terraform-cache  
+      policy: pull-push
+
+
+validate:
+  stage: terraform
+  needs: 
+    - init
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - !reference [.tf_plumbing]
+  script:
+    - terraform validate
+    - terraform fmt -check
+  cache:
+    - <<: *terraform-cache  
+      policy: pull
+
+
+plan:
+  stage: terraform
+  needs: 
+    - validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - !reference [.tf_plumbing]
+  script: |
+      terraform plan -detailed-exitcode -out=tfplan.binary || EXIT_CODE=$?
+      EXIT_CODE=${EXIT_CODE:-$?}
+      if [ $EXIT_CODE -eq 0 ]; then 
+          echo "TF_CHANGED=no" > ../build.env  
+      elif [ $EXIT_CODE -eq 2 ]; then 
+          echo "TF_CHANGED=yes" > ../build.env
+      else
+          echo "TF_CHANGED=error" > ../build.env
+          echo "Terraform plan failed unexpectedly!" >&2
+          exit 1
+      fi
+      terraform show -no-color tfplan.binary > tfplan.txt
+      echo "TERRAFORM_WORKSPACE:$tf_workspace" >> tfplan.txt
+      if [ ! -f tfplan.txt ]; then
+        echo "Error: File tfplan.txt does not exist."
+        exit 1
+      fi
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - ${TF_ROOT}/tfplan.txt
+    expire_in: 1 week
+  cache:
+    - <<: *terraform-cache  
+      policy: pull
+    - <<: *tfout-cache
+      policy: push
+
+plan_summary:
+  stage: terraform
+  image: python:3.12
+  tags:
+    - docker-amd64
+  needs:
+    - plan
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script: |
+      python report.py terraform $TF_ROOT/tfplan.txt plan_summary.md
+      
+      # Post the summary as a comment
+      COMMENT_BODY=$(cat plan_summary.md | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
+      curl --request POST \
+        --header "PRIVATE-TOKEN: $REPO_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "{\"body\": \"$COMMENT_BODY\"}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
+      echo "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
+
+  cache:
+    - <<: *terraform-cache  
+      policy: pull
+    - <<: *tfout-cache
+      policy: pull
+
+
+apply:
+  stage: terraform
+  needs: 
+    - init
+  rules:
+      - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"'
+  dependencies:
+    - init
+  before_script:
+    - !reference [.tf_plumbing]
+  script: |
+    if [ "$TF_CHANGED" == "yes" ]; then
+        terraform apply -input=false -compact-warnings -auto-approve
+    fi
+    terraform output -json | jq . > terraform_output.json
+  cache:
+    - <<: *terraform-cache  
+      policy: pull
+    - <<: *tfout-cache
+      policy: push
+
+
+lint_backend:
+  stage: backend
+  image: python:3.12
+  tags:
+    - docker-amd64
+  needs: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - python -m venv ${PIP_CACHE}
+    - source ${PIP_CACHE}/bin/activate
+    - pip install -r backend/requirements.txt
+    - pip install -r backend/requirements-dev.txt
+    - pip install pylint
+    - pip install colorama
+  script: |
+    mkdir -p pylint_reports
+    pylint --output-format=json backend/**/*.py > pylint_reports/lint_results.json || true
+    error_count=$(python report.py python pylint_reports/lint_results.json pylint_reports/summary.md)
+
+    COMMENT_BODY=$(cat pylint_reports/summary.md | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
+    curl --request POST \
+      --header "PRIVATE-TOKEN: $REPO_TOKEN" \
+      --header "Content-Type: application/json" \
+      --data "{\"body\": \"$COMMENT_BODY\"}" \
+      "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
+
+    if [ $error_count -gt 0 ]; then
+        echo "Frontend linting failed with $error_count errors"
+        exit 1
+    fi
+  artifacts:
+    paths:
+      - pylint_reports/
+    when: always
+    expire_in: 1 week
+
+
+build_frontend:
+  stage: frontend
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
+      changes:
+        - 'frontend/**/*'
+  script: |
+    cd frontend
+    DOCKER_BUILDKIT=1 docker build -o . --build-arg BRANCH=${CI_COMMIT_BRANCH} -f Dockerfile.builder .
+  cache:
+    - <<: *frontend-cache
+      policy: push
+
+
+build_backend:
+  stage: backend
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
+      changes:
+        - 'backend/**/*'
+  script: |
+    cd backend/
+    DOCKER_BUILDKIT=1 docker build -o . -f Dockerfile.package .
+    cd package
+    zip -r ../${CI_COMMIT_SHORT_SHA}.zip .
+    cd ..
+    cd app
+    zip -g ../${CI_COMMIT_SHORT_SHA}.zip *  
+  cache:
+    - <<: *backend-cache
+      policy: push
+
+
+deploy_frontend:
+  stage: frontend
+  needs: 
+    - apply
+    - build_frontend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"'
+      changes:
+        - 'frontend/**/*'
+  before_script:
+    - !reference [.aws_plumbing]
+  script: |
+    s3_bucket_name=$(jq -r '.frontend_app_bucket.value' terraform/terraform_output.json)
+    aws s3 sync frontend/output_for_s3/ s3://$s3_bucket_name/ --delete
+    cf_distro_id=$(jq -r '.cloudfront_distribution_id.value' terraform/terraform_output.json)
+    aws cloudfront create-invalidation --distribution-id $cf_distro_id --paths "/*"
+  cache:
+    - <<: *frontend-cache
+      policy: pull
+    - <<: *tfout-cache
+      policy: pull
+
+
+deploy_backend:
+  stage: backend
+  needs: 
+    - apply
+    - build_backend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"'
+      changes:
+        - 'backend/**/*'
+  before_script:
+    - !reference [.aws_plumbing]
+  script: |
+    test -f terraform/terraform_output.json || { echo "File missing"; exit 1; }
+    s3_artifact=$(jq -r '.backend_source_artifact.value' terraform/terraform_output.json)
+    s3_bucket=$(jq -r '.backend_source_bucket.value' terraform/terraform_output.json)
+    s3_key=$(jq -r '.backend_source_key.value' terraform/terraform_output.json)
+    lambda_function_name=$(jq -r '.backend_lambda_function_name.value' terraform/terraform_output.json)
+    aws_region=$(jq -r '.aws_region.value' terraform/terraform_output.json)
+    aws s3 cp backend/${CI_COMMIT_SHORT_SHA}.zip $s3_artifact
+    aws lambda update-function-code \
+    --function-name $lambda_function_name \
+    --s3-bucket $s3_bucket \
+    --s3-key $s3_key \
+    --region $aws_region \
+    --publish
+  cache:
+    - <<: *backend-cache  
+      policy: pull
+    - <<: *tfout-cache
+      policy: pull
+
+
+scan_for_secrets:
+  stage: prepare_for_github
+  needs: 
+    - job: apply
+      optional: true
+    - job: deploy_frontend
+      optional: true
+    - job: deploy_backend
+      optional: true
+  when: on_success
+  rules:
+      - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"'
+  before_script:
+    - git config --global --add safe.directory '*'
+  script: 
+    - trufflehog --no-update filesystem .  --fail --exclude-paths=th-exclude-paths.txt

@@ -1,0 +1,7 @@
+FROM node:20.18.1
+
+RUN npm install -g typescript @angular/cli
+
+WORKDIR /app
+
+CMD ["/app/start-local.sh"]

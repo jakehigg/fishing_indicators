@@ -1,0 +1,10 @@
+<mat-card appearance="outlined"  *ngIf="shortForecast">
+    <mat-card-header>Weather</mat-card-header>
+    <mat-card-content>
+        <b>Air: </b>{{ temperature !== null ? temperature : 'Loading...' }} °F<br>
+        <b>Conditions: </b>{{ shortForecast !== null ? shortForecast : 'Loading...' }}<br>
+        <b>Precipitation: </b>{{ precipitationProbability !== null ? precipitationProbability : 'Loading...' }}%<br>
+        <b>Wind Speed: </b>{{ windSpeed !== null ? windSpeed : 'Loading...' }}<br>
+        <b>Direction: </b> {{ windDirection !== null ? windDirection : 'Loading...' }}<br>
+    </mat-card-content>
+</mat-card>

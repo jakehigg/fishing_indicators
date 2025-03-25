@@ -1,0 +1,10 @@
+<mat-card appearance="outlined">
+    <mat-card-header>Tide Charts</mat-card-header>
+    <mat-card-content>
+        <canvas #tideChart height="300px"></canvas>
+    </mat-card-content>
+    <mat-card-footer>
+        <b>Station: </b>{{ stationName !== null ? stationName : 'Loading...' }} 
+    </mat-card-footer>
+  </mat-card>
+  
