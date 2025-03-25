@@ -27,7 +27,3 @@ The backend is a simple "API Gateway" in Flask which forwards the requests to th
 
 ## Status
 This project is currently in development.  In it's current incarnation here it is close to MVP status.  There are a few items that need ironing out, but it deploys and runs, and that's what counts.
-
-## License
-GPL v3
-FWIW There is nothing special here, but because I learned everything I know from others who were generous enough to share their knowledge, I hope this can help someone else figure out how to do "that ont weird thing in Terraform".  
